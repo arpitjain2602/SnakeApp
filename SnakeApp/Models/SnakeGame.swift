@@ -20,8 +20,23 @@ class SnakeGame: ObservableObject {
     @Published var direction: Direction = .right
     private var pendingDirection: Direction? = nil
 
+    @Published var highScore: Int = UserDefaults.standard.integer(forKey: "HighScore")
+
     private var timer: Timer?
-    private let moveInterval: TimeInterval = 0.15
+    private var moveInterval: TimeInterval {
+        // Speed up as score increases, min 0.07s
+        max(0.15 - Double(score) * 0.01, 0.07)
+    }
+
+    // Feature toggles and obstacles for future features
+    @Published var edgeWrappingEnabled: Bool = false
+    @Published var obstacles: [Position] = []
+
+    @Published var snakeColor: Color = .green
+    @Published var snakeBodyColor: Color = .blue
+    @Published var foodColor: Color = .red
+    @Published var gridSize: (rows: Int, cols: Int) = (20, 20)
+    @Published var numObstacles: Int = 5
 
     init(rows: Int = 20, cols: Int = 20) {
         self.numRows = rows
@@ -32,15 +47,16 @@ class SnakeGame: ObservableObject {
     }
 
     func startGame() {
-        snake = [Position(x: numCols/2, y: numRows/2)]
+        snake = [Position(x: gridSize.cols/2, y: gridSize.rows/2)]
         direction = .right
         score = 0
         isGameOver = false
+        numRows = gridSize.rows
+        numCols = gridSize.cols
         spawnFood()
+        spawnObstacles()
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: moveInterval, repeats: true) { [weak self] _ in
-            self?.moveSnake()
-        }
+        startTimer()
     }
 
     func stopGame() {
@@ -59,6 +75,13 @@ class SnakeGame: ObservableObject {
         pendingDirection = newDirection
     }
 
+    private func startTimer() {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: moveInterval, repeats: true) { [weak self] _ in
+            self?.moveSnake()
+        }
+    }
+
     private func moveSnake() {
         guard !isGameOver else { return }
         if let pending = pendingDirection {
@@ -72,16 +95,33 @@ class SnakeGame: ObservableObject {
         case .left: newHead.x -= 1
         case .right: newHead.x += 1
         }
+        // Edge wrapping
+        if edgeWrappingEnabled {
+            newHead.x = (newHead.x + numCols) % numCols
+            newHead.y = (newHead.y + numRows) % numRows
+        }
         // Check collisions
-        if newHead.x < 0 || newHead.x >= numCols || newHead.y < 0 || newHead.y >= numRows || snake.contains(newHead) {
+        if (!edgeWrappingEnabled && (newHead.x < 0 || newHead.x >= numCols || newHead.y < 0 || newHead.y >= numRows)) || snake.contains(newHead) || obstacles.contains(newHead) {
             isGameOver = true
             stopGame()
+            if score > highScore {
+                highScore = score
+                UserDefaults.standard.set(highScore, forKey: "HighScore")
+            }
+            onGameOver?()
             return
         }
         snake.insert(newHead, at: 0)
         if newHead == food {
             score += 1
+            if score > highScore {
+                highScore = score
+                UserDefaults.standard.set(highScore, forKey: "HighScore")
+            }
             spawnFood()
+            // Speed up
+            startTimer()
+            onEatFood?()
         } else {
             snake.removeLast()
         }
@@ -94,4 +134,20 @@ class SnakeGame: ObservableObject {
         } while snake.contains(newFood)
         food = newFood
     }
+
+    private func spawnObstacles() {
+        obstacles = []
+        var placed = 0
+        while placed < numObstacles {
+            let pos = Position(x: Int.random(in: 0..<numCols), y: Int.random(in: 0..<numRows))
+            if !snake.contains(pos) && pos != food && !obstacles.contains(pos) {
+                obstacles.append(pos)
+                placed += 1
+            }
+        }
+    }
+
+    // Hooks for sound and haptic feedback
+    var onEatFood: (() -> Void)?
+    var onGameOver: (() -> Void)?
 } 
